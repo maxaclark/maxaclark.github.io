@@ -1,0 +1,491 @@
+---
+title: "Predicting Muscle Injuries in Professional Soccer"
+author: "Max Clark"
+date: "2024-05-23"
+output: 
+  html_document:
+    toc: TRUE
+    toc_float: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The goal of this project is to predict the number of muscle injuries a professional soccer club will experience over the course of a season. Soccer, like many sports, is one in which the successes of any given team are often reduced to how injury-free the players remain as the year progresses. To the average viewer, therefore, it may seem little more than bad luck when a club is required to limp through a particularly injury-riddled season. I believe, however, that this isn't the case. I'm hopeful that it may be possible to accurately predict the amount of muscle injuries a club will experience, and that a club may use these predictions to alter their strategies throughout the season.
+
+### Why Muscle Injuries?
+
+While it may initially make sense to try and predict all types of injuries, some injuries actually are just bad luck. A broken leg, for example, or a concussion. These injuries are not caused by the simple wear and tear of a long season, and cannot be prevented by even the best medical staff in the world. Thus, it doesn't necessarily make sense to try and predict these incidents, or at least not with the same predictors. Medical data, however, suggests that muscle injuries are much more predictable.
+
+## The Data Set
+
+Because of this delineation between muscle and non-muscle injuries, acquiring this data set is more difficult. In fact, I had to build the entire data set myself. This means that rather than cleaning the data, and eliminating possible predictors that clearly would not be very useful, my job was to instead think of what predictors I thought would be most influential and attainable for a one-man team. The resulting data set has columns as follows:
+
+1.  `club` - This is simply the 3 letter abbreviation of the club, followed by the last 2 digits of the year that the season of observation ended in. For example, the first observation in the data set is "MCI22", which stands for "Manchester City 21/22". NOTE: this variable is NOT a predictor, but simply an identifier for each observation.
+
+2.  `sqsize` - Squad size. Professional soccer clubs have rosters that are split into 3 categories each matchweek: starters, bench players, and reserves. This variable counts any player that was available to be called up to the matchday squad (but that was not necessarily selected) for any match throughout the season. With the mid-season transfer window, which allows for the actual squad size to change throughout the year, this is my work-around.
+
+3.  `sqval` - Squad value. This is determined by summing the individual transfer value estimations for each player in the squad. The transfer value estimations were computed by transfermarkt.com.
+
+4.  `sqage` - Average squad age. This is the arithmetic mean age of all players in the squad.
+
+5.  `ltinj` - Long-term non-muscle injuries. While non-muscle injuries are difficult to predict, they may be useful in predicting muscle injuries as they impact the ability of a manager to give his healthy players rest when they need it. I decided that long-term in this context would equate to at least 3 weeks (or 21 days), as injuries of shorter length won't impact the relative squad size for as long.
+
+6.  `league` - The league in which the club plays. There are 3 European leagues that I sampled from: the English Premier League, La Liga, and the Bundesliga. These leagues are touted as having among the highest quality in Europe, but also very different styles of play. For this reason, the specific league in which a team plays may have different wear and tear on the players.
+
+7.  `year` - I sampled the 21/22 and 22/23 seasons from each of the 3 leagues in the data set. There are 2 options for year, then, 22 or 23. The number represents the year in which the season ended, once again.
+
+8.  `musc` - Our outcome variable, `musc`, represents each muscle injury a team faced throughout the given season. Unlike `ltinj`, this variable does not take into account the length of the injury.
+
+9.  `match` - Matches played. This also includes matches from outside each team's domestic league (ie. Champions League, Europa League, and Conference League, as well as domestic cups).
+
+All of the data was available on [Transfer Markt](https://www.transfermarkt.com/)
+
+By sampling 2 seasons from each league, I have amassed 116 observations: 2x20 clubs from the EPL and La Liga each, and 2x18 from the Bundesliga.
+
+## Missing Data
+
+While none of the data was "missing" per se, as I constructed the data set myself, I did run into a problem where players were listed as being injured for a given stretch of time, but it was listed as an "Unknown Injury". These entries could be either muscle or non-muscle, and thus I decided that I couldn't include any such injuries in a team's injury count. This then introduces a certain aspect of unavoidable error.
+
+## Exploratory Data Analysis
+
+It's now time to load the necessary packages and read our data into R. Here, `year` is read in as a numeric variable, as it can only take the values 22 or 23. This is not our intention, obviously, so we must mutate the data set so that it's a factor.
+
+```{r warning=FALSE, message=FALSE}
+library(readxl)
+library(tidymodels)
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(ggthemes)
+library(kableExtra)
+library(kknn)
+library(glmnet)
+library(ranger)
+library(xgboost)
+library(vip)
+
+inj.data <- read_xlsx('C:/Users/maxac/OneDrive/131 Project/PSTAT131ProjectData.xlsx')
+inj.data <- inj.data %>% mutate(year = factor(year, levels = c("22","23")))
+```
+
+### Correlation Plot
+
+Because there is no missing data in the data set, we are able to produce a correlation plot that includes every nominal variable.
+
+```{r include=TRUE}
+inj.data %>% 
+  select(where(is.numeric)) %>% 
+  cor() %>% 
+  corrplot(type = 'lower', diag=FALSE, method = 'color')
+```
+
+The highest correlation on the plot is that between `match` and `sqval`, which is exactly to be expected as the best teams are worth the most, and also are typically the most successful in tournament-style competitions, thus requiring that they play more games. In our data, there is a correlation value of nearly 1 between these variables, which is in line with our expectations. The next is the relationship between `ltinj` and `musc`. While the correlation between these two variables is not nearly as high as the previous relationship, their moderately high, positive correlation is promising with respect to our earlier assertion on the role of `ltinj`. As `ltinj` has the highest correlation with `musc` out of all other predictors, we can expect it to be very useful. The final observation that I found interesting was that no predictors were highly correlated with `ltinj`, which aids our assertion that long-term non-muscle injuries truly are mostly bad luck.
+
+### Muscle Injuries vs. League and Year
+
+In determining whether or not `league` and `year` will be useful predictors, I believe it will be helpful to plot `musc` against these two variables.
+
+```{r include=TRUE}
+inj.data %>% 
+  ggplot(aes(x=musc, y = reorder(league, musc), fill = year)) +
+  geom_boxplot() +
+  theme_bw() +
+  labs(x='Muscle Injuries', y='League')
+```
+
+From this plot we see that each league has a very different distribution. The Premier League and La Liga have similar means (the Premier League's mean may be slightly lower), however, La Liga seems to have more spread than the Prem. Meanwhile, the Bundesliga has a much higher mean and variance than the other two. Finally, while each year of a given league seems to have a different mean for `musc`, it doesn't appear that either year has a consistently higher mean than the other. Variance appears to be a different story, though, as the 2022/23 season appears to have less variance than the 2021/22 season, across leagues.
+
+### League vs. Squad Value
+
+```{r}
+inj.data %>% 
+  ggplot(aes(x = sqval, y = league)) +
+  geom_boxplot()
+```
+
+Out of curiosity, I wanted to see the relationship between `league` and `sqval`, and compare that to `league` and `musc` in the previous plot. What I found was the exact inverse of before. This time the mean `sqval` for the Prem was much higher than its counterparts, and it had the greatest variance. Meanwhile, La Liga and the Bundesliga had similar means, but La Liga's spread was much greater than the Bundesliga's.
+
+### Muscle Injuries vs. Year
+
+```{r include=TRUE}
+inj.data %>% 
+  ggplot(aes(x=musc, y = reorder(year, musc))) +
+  geom_boxplot() +
+  theme_bw() +
+  labs(x='Muscle Injuries', y='Year')
+```
+
+This plot is to further explore `musc` and `year` without the distractor of `league`, however, the results show nothing different from what was uncovered above. The mean of each year is roughly equivalent, while the spread of 2022/23 is markedly lower than 2021/22.
+
+### Muscle Injuries
+
+Finally, let's see the distribution of our outcome variable `musc`, or muscle injuries.
+
+```{r include=TRUE}
+inj.data %>% 
+  ggplot(aes(x=musc)) +
+  geom_bar(fill = "blue") +
+  theme_bw() + geom_vline(xintercept = mean(inj.data$musc)) +
+  labs(x = "Muscle Injuries", title = "Distribution of Muscle Injuries")
+```
+
+We see here that the distribution of muscle injuries does not appear normal, but rather that it is skewed to the right. The range is 0 to 38, although technically `musc` could take the value of any non-negative integer, and the mean is 11.28. The sample, however, is actually bi-modal, as 6 and 8 are the two most common values for `musc`.
+
+## Data Split and k-Fold Cross-Validation
+
+My data set is definitely on the smaller side, with only 116 observations, thus the data split will need to be very training set heavy. I have decided on a 90-10 split. Additionally, because `league` was shown to be an important class predictor, I have chosen to stratify the split on `league` rather than the outcome variable in order to avoid class-imbalance. For the same reason as above, k-fold cross-validation should theoretically be more successful with more folds rather than less, as each model will then be trained on more data. The only caveat is that the training error may then have greater variance across folds, however, this shouldn't be too big of an issue. I have chosen, at the recommendation of Professor Coburn, a k-value of 20, which is far outside the standard range of k-values but should be better suited for my data set.
+
+```{r}
+set.seed(2012)
+inj.split <- initial_split(inj.data, prop=.9, strata = league)
+inj.train <- training(inj.split)
+inj.test <- testing(inj.split)
+inj.folds <- vfold_cv(inj.train, v=20, strata=league)
+```
+
+After inspection of the testing and training sets, we can confirm that the split was successful, as the training set has 104 observations while the testing set has 12. Furthermore, the stratification was successful as there is only mild class imbalance among leagues, due to the Bundesliga only having 18 teams per season as opposed to 20.
+
+```{r}
+inj.train %>% 
+  ggplot(aes(x=league)) +
+  geom_bar(fill = "blue") +
+  labs(x = "League") +
+  theme_classic()
+```
+
+## Recipe Set-Up
+
+We discovered in the EDA section that `year` may not be a very useful predictor because the mean `musc` values for each year was roughly the same. It is true that because the range of 2022/23 was much smaller than 2021/22, it still may have some use, as higher values for `musc` are more likely to be from 2021/22 than 2022/23, but given the goal of the project, it is best that we attempt to create our models without it. The overall goal of the project was to create a model, or models, that a club could use to predict the number of muscle injuries it would encounter in a given season, but if the model requires you to input a year that has not occurred yet, the model is useless. It might, therefore, make sense to also exclude `ltinj`, as you can't know how many long-term non-muscle injuries you will face until after the season, however, because there exists a mid-season transfer window in which the club can alter the characteristics of their squad by signing and selling players, the user of the model can simply ball-park an estimate of `ltinj` and then update it halfway through the year if the estimate appears to be off the mark. The same goes for the predictor `match`, or matches played. So, in other words, leading into the season the club will have estimates on how many games they hope to play based on how far they expect to progress in each tournament they play in, and how many long-term non-muscle injuries they will have. By the winter transfer window the club will then evaluate if those estimates are turning out to be accurate, and, if not, they will update those estimates with new, more accurate (hopefully) values. They then have the opportunity to make adjustments to their squad throughout the transfer window to meet what they deem as an acceptable value for `musc`. Therefore, when creating the recipe for our models, we will include all predictors except for `year`. Lastly, we will also make sure to center and scale all predictors because our predictors have vastly different domains. This isn't important for every model that we will fit, but for k-nearest neighbors, for example, having scaled and normalized predictors is essential.
+
+```{r}
+inj.recipe <- recipe(musc ~ sqsize + sqval + sqage + ltinj + league + match, data=inj.train) %>% step_dummy(league) %>% 
+  step_center(all_predictors()) %>% 
+  step_scale(all_predictors())
+```
+
+Here we prep and bake the recipe to make sure it executed correctly.
+
+```{r}
+prep(inj.recipe) %>% 
+  bake(new_data = inj.train) %>% 
+  head() %>% 
+  kable() %>% 
+  kable_styling(full_width=F) %>% 
+  scroll_box(width = "100%", height = "200px")
+```
+
+## Model Building
+
+When it comes to the selection of model types to use for this project, I would like to use as wide a variety of models as possible. Thus, I will be training k-nearest neighbors, linear regression, elastic net, random forest, gradient boosted tree, and polynomial regression models. The metric I've decided to use to measure model performance is RMSE, as it is among the most commonly used metrics for regression problems. I've separated the model constructions into one section each so I can more easily explore the individual results. Finally, the two best performing models will then be used on the testing data, where we'll collect our final results.
+
+### KNN
+
+##### *Setting up the workflow and grid, then tuning the model and plotting the results:*
+
+```{r}
+knn <- nearest_neighbor(neighbors = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("kknn")
+
+knn.wflow <- workflow() %>% 
+  add_model(knn) %>% 
+  add_recipe(inj.recipe)
+
+knn.grid <- grid_regular(neighbors(range = c(1, 15)), levels = 15)
+
+knn.tune.res <- tune_grid(
+  object = knn.wflow, 
+  resamples = inj.folds, 
+  grid = knn.grid
+)
+autoplot(knn.tune.res, metric = 'rmse')
+```
+
+##### *Using* `collect_metrics()` *to see the data visualized on the plot:*
+
+```{r}
+collect_metrics(knn.tune.res)
+```
+
+##### *Storing the best k-nearest neighbors model and finalizing the workflow. We'll fit the model to the training data as well just in case it's in our top 2:*
+
+```{r}
+best.knn <- select_best(knn.tune.res, metric = 'rmse')
+knn.wflow.final <- finalize_workflow(knn.wflow, best.knn)
+knn.fit <- fit(knn.wflow.final, inj.train)
+```
+
+After tuning our KNN model we see that the lowest RMSE was 5.296, achieved by the model with 9 neighbors. It's also important to note that the RMSE initially decreased as more neighbors were added, but as I extended domain of neighbors to be tested (from 10 initially to 15), I found that RMSE eventually shot back up.
+
+### Linear Regression
+
+##### *Creating the workflow and fitting the model to each fold. Again, we fit the model to our training data just in case:*
+
+```{r}
+lr <- linear_reg() %>% set_engine("lm")
+
+lr.wflow <- workflow() %>% 
+  add_model(lr) %>% 
+  add_recipe(inj.recipe)
+
+lr.rmse <- fit_resamples(lr.wflow, resamples = inj.folds)
+collect_metrics(lr.rmse)
+
+lr.fit <- fit(lr.wflow, inj.train)
+```
+
+Our linear regression model doesn't have any parameters to tune, but after k-fold cross-validation was conducted, we see that it actually performed worse than our KNN model. This indicates that the relationships between `musc` and our predictors may not be very linear, and furthermore, that more flexible models may have more success with our data.
+
+### Elastic Net
+
+##### *Setting up the workflow and grid, then tuning the model and plotting the results:*
+
+```{r warning=FALSE}
+en <- linear_reg(mixture = tune(), 
+                              penalty = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("glmnet")
+
+en.wflow <- workflow() %>% 
+  add_model(en) %>% 
+  add_recipe(inj.recipe)
+
+en.grid <- grid_regular(penalty(range = c(0, 1),
+                                     trans = identity_trans()),
+                        mixture(range = c(0, 1)),
+                             levels = 10)
+
+en.tune.res <- tune_grid(
+  object = en.wflow, 
+  resamples = inj.folds, 
+  grid = en.grid
+)
+autoplot(en.tune.res, metric = 'rmse')
+```
+
+##### *Using* `collect_metrics()` *to see the data visualized on the plot:*
+
+```{r}
+collect_metrics(en.tune.res)
+```
+
+##### *Storing the best elastic net model and finalizing the workflow. Fitting to training data just in case:*
+
+```{r}
+best.en <- select_best(en.tune.res, metric = 'rmse')
+en.wflow.final <- finalize_workflow(en.wflow, best.en)
+en.fit <- fit(en.wflow.final, inj.train)
+```
+
+In order to optimize our linear regression model as much as possible, I decided to employ elastic net regularization, a combination of ridge and lasso regularization, rather that having to choose between one or the other. As we can see, the optimization worked, as the validation RMSE went down to 5.385, however, this is still worse than KNN. By examining the plot we see that the higher the lasso penalty, the greater the variance in RMSE. At the same time, RMSE seemed to hit a consistent minimum at around 0.556 mixture. Overall, it seems that inflexible models don't work very well with our data.
+
+### Random Forest
+
+##### Setting up the workflow and grid:
+
+```{r}
+rf <- rand_forest(mtry = tune(), 
+                           trees = tune(), 
+                           min_n = tune()) %>%
+  set_engine("ranger", importance = "impurity") %>% 
+  set_mode("regression")
+
+rf.wflow <- workflow() %>% 
+  add_model(rf) %>% 
+  add_recipe(inj.recipe)
+
+rf.grid <- grid_regular(mtry(range = c(1, 6)), 
+                        trees(range = c(1, 500)),
+                        min_n(range = c(1, 10)),
+                        levels = 10)
+```
+
+##### *Tuning the model and saving the results in a separate code chunk because it takes a long time to run:*
+
+```{r, eval=FALSE}
+rf.tune.res <- tune_grid(object = rf.wflow,
+                         resamples = inj.folds,
+                         grid = rf.grid)
+save(rf.tune.res, file = "rf.tune.res.rda")
+```
+
+##### Loading the results so we don't have to run the tuning chunk every time we wish to view the results:
+
+```{r}
+load("rf.tune.res.rda")
+```
+
+##### *Using* `collect_metrics()` *to view the results:*
+
+```{r}
+collect_metrics(rf.tune.res)
+```
+
+##### *Plotting the results:*
+
+```{r}
+autoplot(rf.tune.res, metric = 'rmse')
+```
+
+##### Storing the best random forest, finalizing the workflow, and fitting to training data:
+
+```{r}
+best.rf <- show_best(rf.tune.res, metric = 'rmse',n=1)
+rf.wflow.final <- finalize_workflow(rf.wflow, best.rf)
+rf.fit <- fit(rf.wflow.final, inj.train)
+```
+
+Moving back to a rather flexible option, our random forest model was finally successful in improving upon the k-Nearest Neighbors RMSE. As the plot shows, as long as `mtry` is less than p, or the number of predictors in our model, the RMSE is consistently low. This is exactly what we'd expect as it avoids bagging. Otherwise, no number of trees or minimal number of observations per node performed consistently better than any others, as long as the number of trees was greater than 50. Our best random forest had an `mtry` value of 4, 333 trees, and at least 1 observation per region. The `min_n` value of 1 is very surprising to me, and may be a sign of over-fitting. Regardless, it currently sits on top of our leader board.
+
+### Gradient Boosted Tree
+
+##### *Creating the workflow and grid:*
+
+```{r}
+bt <- boost_tree(mtry = tune(), 
+                           trees = tune(), 
+                           learn_rate = tune()) %>%
+  set_engine("xgboost") %>% 
+  set_mode("regression")
+
+bt.wflow <- workflow() %>% 
+  add_model(bt) %>% 
+  add_recipe(inj.recipe)
+
+bt.grid <- grid_regular(mtry(range = c(1, 6)), 
+                        trees(range = c(200, 600)),
+                        learn_rate(range = c(-3, -.5)),
+                        levels = 5)
+```
+
+##### *Tuning the model and saving the results in a separate chunk because it takes a long time to run:*
+
+```{r, eval=FALSE}
+bt.tune.res <- tune_grid(
+  bt.wflow, 
+  resamples = inj.folds, 
+  grid = bt.grid
+)
+save(bt.tune.res, file = 'bt.tune.res.rda')
+```
+
+##### *Loading the results to avoid running the tuning code again:*
+
+```{r}
+load('bt.tune.res.rda')
+```
+
+##### *Plotting the results:*
+
+```{r}
+autoplot(bt.tune.res, metric = 'rmse')
+```
+
+##### *Using* `collect_metrics()` *to view the results:*
+
+```{r}
+collect_metrics(bt.tune.res)
+```
+
+##### Storing the best gradient boosted tree, finalizing the workflow and fitting to the training data:
+
+```{r}
+best.bt <- show_best(bt.tune.res, n=1, metric = 'rmse')
+bt.wflow.final <- finalize_workflow(bt.wflow, best.bt)
+bt.fit <- fit(bt.wflow.final, inj.train)
+```
+
+Our second and final tree-based model is the gradient boosted tree. As it is once again quite flexible, we should have expected it to perform rather well. With a validation RMSE of 4.874, however, we see that it performed off the charts relative to our previous models. Interestingly, as the learning rate increased, the number of trees had less and less bearing on the best model. Additionally, as the learning rate increased towards 0.01, the RMSE dropped rapidly. Finally, the most optimal number of splits in each tree was consistently two or three splits. The boosted tree achieved such a low RMSE by having 3 splits per tree, 600 total trees, and a learning rate of around 0.012. Notably, we only tried 3 different learning rates in the range of 0.01 to 0.3, so in the future it may be interesting to see how our results change by testing more thoroughly between these two bounds.
+
+### Polynomial Regression
+
+##### *Altering the standard recipe to be compatible with polynomial regression, creating the workflow, setting up the grid, and tuning the model:*
+
+```{r}
+inj.recipe.poly <- inj.recipe %>% 
+  step_poly(sqval, sqsize, sqage, ltinj, match, degree = tune())
+
+poly <- linear_reg() %>%
+  set_mode("regression") %>%
+  set_engine("lm")
+
+poly.wflow <- workflow() %>%
+  add_model(poly) %>%
+  add_recipe(inj.recipe.poly)
+
+poly.grid <- grid_regular(degree(range = c(1, 10)), 
+                            levels = 10)
+
+poly.tune.res <- tune_grid(poly.wflow, resamples = inj.folds, 
+                       grid = poly.grid)
+```
+
+##### *Plotting the results:*
+
+```{r}
+autoplot(poly.tune.res, metric = 'rmse')
+```
+
+##### *Using* `collect_metrics()` *to view the results:*
+
+```{r}
+collect_metrics(poly.tune.res)
+```
+
+##### *Storing the best polynomial regression model, finalizing the workflow, and fitting to the training data:*
+
+```{r}
+best.poly <- select_best(poly.tune.res, metric = 'rmse')
+poly.wflow.final <- finalize_workflow(poly.wflow, best.poly)
+poly.fit <- fit(poly.wflow.final, inj.train)
+```
+
+Polynomial regression is the more flexible counterpart to linear regression, and thus it is to be expected that polynomial regression performed better than the latter. From the plot we see that, past a degree of 1, the higher the degree, the higher the RMSE. This is somewhat contradictory to our previous discoveries, as our inflexible linear regression and elastic net models were not very successful. With that being said, it was still better to be more flexible than not at all in this case. The optimal model had a degree of 2 and validation RMSE of 5.250, which edged past KNN, but doesn't crack into our top two models.
+
+## Model Training Performance
+
+```{r}
+training.results <- tibble(Model = c('KNN', "Linear Regression", "Elastic Net", 'Random Forest', 'Gradient Boosted Tree', 'Polynomial Regression'), RMSE = c(5.296, 5.493, 5.385, 5.207, 4.838, 5.250))
+
+training.results <- training.results %>% arrange(RMSE)
+training.results
+```
+
+A quick look at the table shows that the two top performing models were the gradient boosted tree and the random forest, in that order. Thus, we will only be applying these models to the testing data.
+
+## Fitting to the Testing Data
+
+Now that we've decided on our best two models, it's time to apply them to the testing data and check our results.
+
+```{r}
+inj.metric <- metric_set(rmse)
+bt.predicted <- augment(bt.fit, new_data = inj.test)
+bt.test.rmse <- inj.metric(bt.predicted, truth = musc, estimate = .pred)
+
+rf.predicted <- augment(rf.fit, new_data = inj.test)
+rf.test.rmse <- inj.metric(rf.predicted, truth = musc, estimate = .pred)
+
+test.rmse <- tibble(Model = c('Gradient Boosted Tree', 'Random Forest'), RMSE = c(bt.test.rmse$.estimate, rf.test.rmse$.estimate))
+
+test.rmse
+```
+
+Both of our models under performed based on their validation RMSE, which is indicative of over-fitting, especially in the case of our random forest. The random forest went from being the second best model to the worst model in the whole project. This isn't surprising, however, as the random forest that performed the best fit as few as 1 observation per region. Overall, these results are decent (maybe for the boosted tree more than the random forest), but there is still much to be desired.
+
+## Conclusion
+
+We set out on this project to develop a model that would assist professional soccer clubs in altering the compositions of their squads to reduce muscle injuries, and as a whole, while it wasn't a total failure, it wasn't a great success either. Of the two models that we applied to the testing data, only one of them was usable. With that being said, given the restrictions of the data set, having any models that work is somewhat impressive.
+
+In terms of the models that were most successful in predicting muscle injuries, it is unsurprising that the most flexible, and thus least parametric models tended to do better, as these models tend to be most compatible with wide ranges of data. The only caveat to having these models is their propensity to over-fit, and that is exactly what we encountered when we applied the boosted tree and random forest to the testing data. In hindsight, it may have been wise to alter the bounds of our tuning grids in order to eliminate the possibility of such over-fitting, especially with the random forest. In the future, I may set the lower bound for `min_n` to be at least 2, which may result in higher RMSE during k-fold cross-validation, but will hopefully provide a more accurate estimation of testing RMSE.
+
+Ultimately, the project was limited from the beginning by two things. First, the data set was too small to adequately train the data on every "type" of team that exists in Europe. Upon looking at the actual predictions that our boosted tree made on the testing data, I noticed that it performed quite well on teams that typically finish below the top few spots in each league, however, it performed abysmally on the two teams in the testing set that finished as champions and runners-up. This is likely to be caused by the fact that there are far fewer of these teams in the data set, and because they have such drastically different squad characteristics due to having to play so many more games in a season. If I were to attempt this project again, with the hopes that I have greater access to the data in question, I would assemble a much bigger data set to tackle this form of imbalance. Secondly, the data had too much error introduced by the "unknown" injuries in each player's profile. These types of player absences appeared several times in each team, altering the `musc` counts by what can only be assumed to be a significant amount each time.
+
+Our model does a fairly good job at ball-parking how many muscle injuries a club will face in a single season, however, because the RMSE is too high, it cannot be a useful tool for teams that want to make small adjustments to their squad in order to reduce injuries.
+
+## Source
+
+All data was taken from [transfermarkt.com](https://www.transfermarkt.com/)
