@@ -16,6 +16,10 @@ The goal of this project is to predict the number of muscle injuries a professio
 
 ## Repository Structure
 ```
+|---Vizualizations
+|         |---blah.png
+|         |---blah2.png
+|---notebook.ipynb
 ```
 
 ## Methodology
