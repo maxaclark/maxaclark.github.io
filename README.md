@@ -22,7 +22,7 @@ The goal of this project is to predict the number of muscle injuries a professio
 |         |---musc_dist.png
 |         |---rf_tune.png
 |         |---year_dist.png
-|---PSTAT131ProjectData.xlsx                     # Final Dataset
+|---ProjectData.xlsx                             # Final Dataset
 |---PredictingMuscleInjuriesInProSoccer.Rmd      # Final Project R Markdown File
 |---PredctingMuscleInjuriesInProSoccer.html      # Final Project HTML File
 |---README.md
