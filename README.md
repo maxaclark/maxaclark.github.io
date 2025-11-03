@@ -16,10 +16,18 @@ The goal of this project is to predict the number of muscle injuries a professio
 
 ## Repository Structure
 ```
-|---Vizualizations
-|         |---blah.png
-|         |---blah2.png
-|---notebook.ipynb
+|---vizualizations                               # Project Visualizations
+|         |---bt_tune.png
+|         |---corr_plot.png
+|         |---musc_dist.png
+|         |---rf_tune.png
+|         |---year_dist.png
+|---PSTAT131ProjectData.xlsx                     # Final Dataset
+|---PredictingMuscleInjuriesInProSoccer.Rmd      # Final Project R Markdown File
+|---PredctingMuscleInjuriesInProSoccer.html      # Final Project HTML File
+|---README.md
+|---bt.tune.res.rda                              # Boosted Tree Tuning Data
+|---rf.tune.res.rda                              # Random Forest Tuning Data
 ```
 
 ## Methodology
@@ -45,8 +53,20 @@ The goal of this project is to predict the number of muscle injuries a professio
 
 ## Key Visualizations
 
-### Distibution of Muscle Injuries
-![Distribution of Muscle Injuries](visualizations/musc.dist.png)
+### Distribution of Muscle Injuries
+![Distribution of Muscle Injuries](visualizations/musc_dist.png)
+
+### Correlation Plot of Potential Predictors
+![Correlation Plot](visualizations/corr_plot.png)
+
+### Distribution of Year
+![Distribution of Year](visualizations/year_dist.png)
+
+### Random Forest Tuning
+![Random Forest Tuning](visualizations/rf_tune.png)
+
+### Boosted Tree Tuning
+![Boosted Tree Tuning](visualizations/bt_tune.png)
 
 ---
 
