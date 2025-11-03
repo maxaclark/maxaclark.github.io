@@ -45,6 +45,8 @@ The goal of this project is to predict the number of muscle injuries a professio
 
 ## Key Visualizations
 
+### Distibution of Muscle Injuries
+![Distribution of Muscle Injuries](visualizations/musc.dist.png)
 
 ---
 
